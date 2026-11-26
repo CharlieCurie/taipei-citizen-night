@@ -1,0 +1,62 @@
+name: Build Taipei restaurant search
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-restaurant-search.yml'
+permissions:
+  contents: write
+concurrency:
+  group: build-taipei-restaurant-search
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download official restaurant data
+        run: curl --fail --location --retry 2 --max-time 120 'https://data.taipei/api/frontstage/tpeod/dataset/resource.download?rid=e94a712a-be5b-4d8b-89c9-30a5ee21f25d' -o /tmp/restaurants.csv
+      - name: Create search index
+        run: |
+          python - <<'PY'
+          import csv,json,pathlib,unicodedata,re,math
+          p=pathlib.Path('/tmp/restaurants.csv')
+          for enc in ('utf-8-sig','cp950','big5'):
+              try:
+                  content=p.read_text(encoding=enc)
+                  break
+              except UnicodeDecodeError: pass
+          else: raise RuntimeError('CSV encoding unknown')
+          reader=csv.DictReader(content.splitlines())
+          def norm(s): return unicodedata.normalize('NFKC',str(s or '')).strip()
+          print('CSV fields:',reader.fieldnames)
+          result={}
+          for row in reader:
+              r={norm(k).lower():norm(v) for k,v in row.items() if k}
+              name=r.get('商業名稱') or r.get('商號名稱') or r.get('公司名稱') or ''
+              address=r.get('商業地址') or r.get('營業地址') or r.get('地址') or ''
+              if not name or not address or not re.search(r'[台臺]北市',address): continue
+              try:
+                  lat=float(r.get('latitude',''));lng=float(r.get('longitude',''))
+                  if not (24.95<=lat<=25.22 and 121.43<=lng<=121.70): raise ValueError()
+                  lat,lng=round(lat,6),round(lng,6)
+              except (ValueError,TypeError): lat=lng=None
+              result[(name,address)]=[name,address,lat,lng]
+          if len(result)<1000: raise RuntimeError('Unexpectedly few records: '+str(len(result)))
+          out=pathlib.Path('restaurant-search.json')
+          out.write_text(json.dumps(list(result.values()),ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+          print('Restaurant records:',len(result))
+          print('With coordinates:',sum(v[2] is not None for v in result.values()))
+          print('Example names containing 又一村:',[v for v in result.values() if '又一村' in v[0]][:5])
+          PY
+      - name: Commit search data
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add restaurant-search.json
+          git diff --cached --quiet || git commit -m 'Build Taipei official restaurant search data'
+          git pull --rebase origin main
+          git push origin HEAD:main
