@@ -35,7 +35,8 @@ jobs:
           def norm(s):
               return re.sub(r'\s+','',unicodedata.normalize('NFKC',str(s or '')).replace('臺','台'))
           ds=['松山區','信義區','大安區','中山區','中正區','大同區','萬華區','文山區','南港區','內湖區','士林區','北投區']
-          districts={'63000'+str(i+1).zfill(3):d for i,d in enumerate(ds)}
+          districts={str(63000000+(i+1)*10):d for i,d in enumerate(ds)}
+          districts.update({str((i+1)*10).zfill(3):d for i,d in enumerate(ds)})
           tr=Transformer.from_crs(3826,4326,always_xy=True)
           groups=defaultdict(dict)
           def unit(s,u):
