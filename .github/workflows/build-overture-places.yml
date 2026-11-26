@@ -1,0 +1,68 @@
+name: Build public-facing restaurant names
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-overture-places.yml'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download Taipei area open places
+        run: |
+          python -m pip install overturemaps
+          overturemaps download --bbox=121.43,24.95,121.70,25.22 --type=place -f geojsonseq -o /tmp/places.geojsonseq
+      - name: Filter food and drink storefronts
+        run: |
+          python - <<'PY'
+          import json,re,pathlib
+          result={}
+          districts=r'(?:中正|大同|中山|松山|大安|萬華|信義|士林|北投|內湖|南港|文山)區'
+          for line in open('/tmp/places.geojsonseq',encoding='utf-8'):
+              line=line.strip().lstrip('\x1e')
+              if not line: continue
+              f=json.loads(line);p=f.get('properties') or {}
+              names=p.get('names') or {}
+              name=names.get('primary') or ''
+              if not name or p.get('operating_status') in ('permanently_closed','closed'): continue
+              tax=p.get('taxonomy') or {}
+              cats=' '.join(str(x) for x in [p.get('basic_category',''),tax.get('primary',''),*(tax.get('hierarchy') or [])])
+              if not re.search(r'food_and_drink|restaurant|cafe|coffee_shop|bar|pub|tea_house|bakery|eatery',cats): continue
+              coords=(f.get('geometry') or {}).get('coordinates') or []
+              if len(coords)!=2: continue
+              lng,lat=coords
+              if not (24.95<=lat<=25.22 and 121.43<=lng<=121.70): continue
+              for a in p.get('addresses') or []:
+                  if not a: continue
+                  street=(a.get('freeform') or '').strip()
+                  locality=(a.get('locality') or '').strip()
+                  region=(a.get('region') or '').strip()
+                  full=' '.join([street,locality,region])
+                  if not street or re.search(r'新北|New Taipei',full,re.I): continue
+                  if not re.search(r'[臺台]北|Taipei|'+districts,full,re.I): continue
+                  address=street
+                  if not re.search(r'[臺台]北|Taipei',street,re.I):
+                      address=('臺北市'+street) if re.search(r'[\u4e00-\u9fff]',street) else street+', Taipei'
+                  # Require a civic number, not a city-only address.
+                  if not re.search(r'\d|[一二三四五六七八九十]+號',street): continue
+                  result[(name,address)]=[name,address,round(lat,6),round(lng,6)]
+                  break
+          if len(result)<1000: raise RuntimeError('Too few usable records: '+str(len(result)))
+          pathlib.Path('storefront-search.json').write_text(json.dumps(list(result.values()),ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+          print('Public-facing storefront records:',len(result))
+          print('Example 又一村:',[v for v in result.values() if '又一村' in v[0]][:10])
+          PY
+      - name: Commit additional directory
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add storefront-search.json
+          git diff --cached --quiet || git commit -m 'Add Overture public-facing restaurant directory'
+          git pull --rebase origin main
+          git push origin HEAD:main
