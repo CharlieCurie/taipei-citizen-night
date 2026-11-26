@@ -1,2 +1,2 @@
 // 只放可公開的金鑰，絕對不可放 secret/service_role 金鑰。
-window.EVENT_CONFIG = { url: 'https://lxrwqjodbrqjzlyujtrh.supabase.co', key: 'sb_publishable_EIRZEvbiVGr0L-7IGtN2ew_ksVb42el', captchaSiteKey: '' };
+window.EVENT_CONFIG = { url: 'https://lxrwqjodbrqjzlyujtrh.supabase.co', key: 'sb_publishable_EIRZEvbiVGr0L-7IGtN2ew_ksVb42el', captchaSiteKey: '0x4AAAAAAGTyDWb1Hm2rW8n5' };
