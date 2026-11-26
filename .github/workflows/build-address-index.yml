@@ -1,0 +1,84 @@
+name: Build Taipei address index
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-address-index.yml'
+permissions:
+  contents: write
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Download official Taipei address dataset
+        run: curl --fail --location --retry 2 --max-time 180 'https://data.taipei/api/frontstage/tpeod/dataset/resource.download?rid=ce76ca0c-7f94-4935-ab47-1d2a41ca2abb' -o /tmp/addresses.csv
+      - name: Build compact street index
+        run: |
+          python -m pip install pyproj
+          python - <<'PY'
+          import csv, json, re, unicodedata, hashlib, pathlib
+          from collections import defaultdict
+          from pyproj import Transformer
+          p=pathlib.Path('/tmp/addresses.csv')
+          with p.open('rb') as f:
+              sample=f.read(65536)
+          for encoding in ('utf-8-sig','cp950','big5'):
+              try:
+                  sample.decode(encoding,errors='strict')
+                  break
+              except UnicodeDecodeError:
+                  continue
+          def norm(s):
+              return re.sub(r'\s+','',unicodedata.normalize('NFKC',str(s or '')).replace('臺','台'))
+          ds=['松山區','信義區','大安區','中山區','中正區','大同區','萬華區','文山區','南港區','內湖區','士林區','北投區']
+          districts={'63000'+str(i+1).zfill(3):d for i,d in enumerate(ds)}
+          tr=Transformer.from_crs(3826,4326,always_xy=True)
+          groups=defaultdict(dict)
+          def unit(s,u):
+              v=norm(s).removesuffix(u)
+              if not v or v in ('0','000','無'): return ''
+              if v.isdigit(): v=str(int(v))
+              return v+u
+          with p.open(encoding=encoding, newline='') as f:
+              rd=csv.DictReader(f)
+              print('CSV fields:',rd.fieldnames)
+              for row in rd:
+                  r={norm(k):v for k,v in row.items() if k}
+                  district=norm(r.get('鄉鎮市區代碼'))
+                  district=districts.get(district,district)
+                  street=norm(r.get('街路段'))
+                  if district not in ds or not street: continue
+                  house=norm(r.get('號'))
+                  if not house: continue
+                  house=re.sub(r'^0+(?=\d)','',house)
+                  if '號' not in house: house+='號'
+                  addr=unit(r.get('巷'),'巷')+unit(r.get('弄'),'弄')+house
+                  try:
+                      x,y=float(r['橫座標']),float(r['縱座標'])
+                      if x>100000 and y>1000000: x,y=tr.transform(x,y)
+                      if not (121.43<=x<=121.70 and 24.95<=y<=25.22): continue
+                  except (ValueError,KeyError,TypeError): continue
+                  groups[district+street][addr]=[round(y,6),round(x,6)]
+          target=groups.get('文山區萬慶街',{}).get('13巷29號')
+          print('Test address match:',target)
+          count=sum(map(len,groups.values()))
+          print('Total addresses:',count)
+          if count<100000 or not target: raise RuntimeError('Address parsing failed or exact test address missing')
+          out=pathlib.Path('address-index')
+          out.mkdir(exist_ok=True)
+          for street,records in groups.items():
+              key=hashlib.sha256(street.encode()).hexdigest()[:16]
+              (out/(key+'.json')).write_text(json.dumps(records,ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+          (out/'README.txt').write_text('Source: Taipei City Department of Civil Affairs, 臺北市門牌位置數值資料, Government Open Data License v1. https://data.taipei/dataset/detail?id=b7c8e724-1e98-45ee-a0bd-f3840623ed97\n')
+          PY
+      - name: Commit generated index
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add address-index
+          git diff --cached --quiet || git commit -m 'Build Taipei official address index'
+          git push
