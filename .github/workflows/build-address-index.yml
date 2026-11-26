@@ -9,13 +9,13 @@ permissions:
 jobs:
   index:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
       - name: Download official Taipei address dataset
-        run: curl --fail --location --retry 2 --max-time 180 'https://data.taipei/api/frontstage/tpeod/dataset/resource.download?rid=ce76ca0c-7f94-4935-ab47-1d2a41ca2abb' -o /tmp/addresses.csv
+        run: curl --fail --location --retry 2 --retry-max-time 900 --connect-timeout 30 --max-time 900 'https://data.taipei/api/frontstage/tpeod/dataset/resource.download?rid=ce76ca0c-7f94-4935-ab47-1d2a41ca2abb' -o /tmp/addresses.csv
       - name: Build compact street index
         run: |
           python -m pip install pyproj
